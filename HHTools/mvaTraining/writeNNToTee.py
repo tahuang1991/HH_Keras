@@ -475,19 +475,13 @@ def makeNtuple_prediction(masses):
 
 
 
-#makeNtuple_prediction([260])
-makeNtuple_prediction([260, 300, 350, 400, 450, 500, 600,750, 800, 900])
+#makeNtuple_prediction([260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900])
 #makeNtuple_prediction([260, 350, 400, 500])
-#makeNtuple_prediction(350)
-#makeNtuple_prediction(400)
-#makeNtuple_prediction(450)
-#makeNtuple_prediction(600)
-#makeNtuple_prediction(500)
 
 nnlist = ["nnout_MTonly", "nnout_MT2only","nnout_MTandMT2","nnout_MTandMT2_MJJ","nnout_MTandMT2_HME","nnout_MTandMT2_HMEMJJ","nnout_MTandMJJ"]
 nnlist = ["nnout_MTonly", "nnout_MTandMJJ"]
 #nnlist = ["nnout_MTonly"]
-plotdir = "plotsafterDNN/"
+#plotdir = "plotsafterDNN/"
 def makeplots(nnlist, plotdir, masspoints):
     os.system("mkdir -p "+plotdir)
     #masspoints = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 800, 900]
@@ -500,34 +494,39 @@ def makeplots(nnlist, plotdir, masspoints):
 	#bgnamelist = ["DYM10to50","DYToLL0J","DYToLL1J","DYToLL2J"]
 	file_blist = []
 	for bgname in bgnamelist:
-		file_blist.append( output_folder+"/%s_all_addNN_M%d.root"%(bgname ,mass) )
+		file_blist.append( output_folder+"/%s_all_addNN.root"%(bgname) )
 	title = "Signal, Radion M=%d GeV "%mass
-        plotSB(file_slist, file_blist, nnlist, colors, title, mass, plotdir, "radion_M%d"%mass)
+	thisnnlist = []
+	for nn in nnlist:
+		thisnnlist.append(nn+"_M%d"%mass)
+        plotSB(file_slist, file_blist, thisnnlist, colors, title, mass, plotdir, "radion_M%d"%mass)
 
-#makeplots(nnlist, "plotsafterDNN_splitted_20171102/", [400])
+#makeplots(nnlist, "plotsafterDNN_splitted_20171102_test/", [270, 750])
 #makeplots(nnlist, "plotsafterDNN_splitted_20171102/", [260, 350, 400, 500])
 
-def makeLouvainLimithist(masspoints, outdir):
+def makeLouvainLimithist(masspoints, nnout, outdir):
     bgnames = ["sT","DY","TT"]
-    outfile = os.path.join(outdir, "Hhh_FinalBGYield_5pbsignalindata.root")
-    plotname = os.path.join(outdir, "Hhh_FinalBGYield")
+    outfile = os.path.join(outdir, "Hhh_FinalBGYield_%s.root"%nnout)
+    plotname = os.path.join(outdir, "Hhh_FinalBGYield_%s"%nnout)
     ###create tfile
     tfile = ROOT.TFile(outfile, "RECREATE")
     tfile.Close()
-    todraw = "({nnout}*(jj_M<75)+(jj_M>=75 && jj_M<140)*({nnout}+1)+(jj_M>=140)*({nnout}+2))".format(nnout = "nnout_MTonly")
     cut = "1"
     nnbins = [75, 0.0, 3.0] 
     for mass in masspoints:
+        todraw = "({nnout}_M{mass}*(jj_M<75)+(jj_M>=75 && jj_M<140)*({nnout}_M{mass}+1)+(jj_M>=140)*({nnout}_M{mass}+2))".format(nnout = nnout, mass=mass)
 	file_s = os.path.join(output_folder, "radion_M%d_addNN.root"%(mass))
         backgrounddict = {}
 	for bg in bgnames:
 	    allfiles = os.listdir(output_folder)
 	    backgrounddict[bg] = []
 	    for f in allfiles:
-		if f.startswith(bg) and "addNN_M%d"%mass in f:
+		if f.startswith(bg):
 		   backgrounddict[bg].append(os.path.join(output_folder, f))
         histForlimits1D(backgrounddict, bgnames, file_s, mass, todraw, cut, nnbins, outfile, plotname)
 
-#limitdir = "HistForLimits_addsignalindata"
-#os.system("mkdir -p "+limitdir)
+limitdir = "HistForLimits_test"
+os.system("mkdir -p "+limitdir)
 #makeLouvainLimithist([260, 350, 400, 500], limitdir)
+makeLouvainLimithist([260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900], "nnout_MTonly" ,limitdir)
+
