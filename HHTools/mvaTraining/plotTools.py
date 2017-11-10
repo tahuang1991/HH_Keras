@@ -1,5 +1,5 @@
 import numpy as np
-
+import ROOT
 import matplotlib
 matplotlib.use('pdf')
 
@@ -9,8 +9,23 @@ from sklearn import metrics
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
 
+import scipy.stats
 import os
 import codecs, json, numpy
+
+ 
+def weightedMean(x, w):
+    """Weighted Mean"""
+    return np.sum(x * w) / np.sum(w)
+
+def weightedCov(x, y, w):
+    """Weighted Covariance"""
+    return np.sum(w * (x - weightedMean(x, w)) * (y - weightedMean(y, w))) / np.sum(w)
+
+def weightedCorr(x, y, w):
+    """Weighted Correlation"""
+    return weightedCov(x, y, w) / np.sqrt(weightedCov(x, x, w) * weightedCov(y, y, w))
+
 
 def binDataset(dataset, weights, bins, range=None):
     """
@@ -154,6 +169,34 @@ def drawNNOutput(background_training_predictions, background_testing_predictions
             output_Dir=str(output_dir),
             output_Name=str(output_name)
             )
+def drawCorrelation(variables, dataset, weights, output_dir, output_name):
+     
+    c1 = ROOT.TCanvas()
+    h_Corr = ROOT.TH2F("h_Corr","",len(variables), 0, len(variables), len(variables), 0, len(variables))
+    #print "variables ",variables," dataset type ",type(dataset)
+    for index1, var1 in enumerate(variables):
+	for index2, var2 in enumerate(variables[index1:]):
+		index2  = index1 + index2
+		#print("var1 %s, index %d, var2 %s, index %d"%(var1, index1, var2, index2))
+		if (index2==index1):
+			h_Corr.Fill(index1, index2, 1.0)
+		else:
+			var1_array = dataset[:, index1]
+			var2_array = dataset[:, index2]
+			#corr = scipy.stats.pearsonr(var1_array, var2_array)[0]
+			corr = weightedCorr(var1_array, var2_array, weights)
+			h_Corr.Fill(index1, index2, corr)
+			h_Corr.Fill(index2, index1, corr)
+    for index1, var1 in enumerate(variables):
+	h_Corr.GetXaxis().SetBinLabel(index1+1, var1)
+	h_Corr.GetYaxis().SetBinLabel(index1+1, var1)
+    h_Corr.SetStats(0)
+    ROOT.gStyle.SetPaintTextFormat(".2f");
+    h_Corr.Draw("colzTEXT")
+    c1.SaveAs(str(output_dir) +'/'+ str(output_name))
+    c1.SaveAs(str(output_dir) +'/'+ str(output_name).split('.')[0]+".C")
+    print("plotting correction "+str(output_name))
+    
 
 def get_roc(signal, background):
     """
@@ -195,13 +238,26 @@ def draw_roc(signal, background, output_dir=".", output_name="roc", form=".pdf")
     """
 
     x, y = get_roc(signal, background)
+    auc = metrics.auc(x, y, reorder=True)
+
+    #print "roc curve x ",x," type (x) ",type(x)
+    rfile = ROOT.TFile(output_dir +"/" + output_name +".root","RECREATE")
+    tp_auc = ROOT.TParameter(float)("auc", auc)
+    g = ROOT.TGraph(len(x), x, y)
+    g.SetName(output_name)
+    g.GetXaxis().SetTitle("Background efficiency")
+    g.GetYaxis().SetTitle("Signal efficiency")
+    g.SetTitle("ROC curve, Signal efficiency Vs background efficiency, AUC=%.4f"%auc)
+    #g.Print("ALL")
+    tp_auc.Write()
+    g.Write()
+    rfile.Close()
     file_path = output_dir + "/"+ output_name + "_X.cvs"
     numpy.savetxt(file_path, x, delimiter=",")
     file_path = output_dir + "/"+ output_name + "_Y.cvs"
     numpy.savetxt(file_path, y, delimiter=",")
     output_name = output_name + form
 
-    auc = metrics.auc(x, y, reorder=True)
 
     fig = plt.figure(1, figsize=(7, 7), dpi=300)
     fig.clear()
@@ -255,9 +311,31 @@ def draw_keras_history(history, output_dir='.', output_name='loss.pdf'):
     # Create an axes instance
     ax = fig.add_subplot(111)
 
+    #rfile = ROOT.TFile(output_dir+ "/"+ output_name+".root","RECREATE")
+
     training_losses = history.history['loss']
     validation_losses = history.history['val_loss']
     epochs = np.arange(0, len(training_losses))
+    file_path = output_dir + "/"+ output_name + "_training.cvs"
+    numpy.savetxt(file_path, training_losses, delimiter=",")
+    file_path = output_dir + "/"+ output_name + "_validation.cvs"
+    numpy.savetxt(file_path, validation_losses, delimiter=",")
+    file_path = output_dir + "/"+ output_name + "_epoch.cvs"
+    numpy.savetxt(file_path, epochs, delimiter=",")
+
+
+    ##print "keras history training_losses ",type(training_losses), " ",training_losses ," epochs ",type(epochs) ," ",epochs
+
+    #gtraining = ROOT.TGraph(len(training_losses), epochs.astype(float), np.array(training_losses))
+    #gvalidation = ROOT.TGraph(len(training_losses), epochs.astype(float), np.array(validation_losses))
+    ##gtraining.Print("ALL")
+    #gtraining.SetName("trainingloss")
+    #gvalidation.SetName("validationloss")
+    #gtraining.SetTitle("traning loss vs epochs"); gtraining.GetYaxis().SetTitle("loss"); gtraining.GetXaxis().SetTitle("epochs")
+    #gvalidation.SetTitle("validation loss vs epochs");  gvalidation.GetYaxis().SetTitle("loss"); gvalidation.GetXaxis().SetTitle("epochs")  
+    #gtraining.Write()
+    #gvalidation.Write()
+    #rfile.Close()
 
     l1 = ax.plot(epochs, training_losses, '-', color='#8E2800', lw=2, label="Training loss")
     l2 = ax.plot(epochs, validation_losses, '-', color='#468966', lw=2, label="Validation loss")
@@ -286,3 +364,4 @@ def draw_keras_history(history, output_dir='.', output_name='loss.pdf'):
     fig.savefig(os.path.join(output_dir, output_name))
 
     plt.close()
+    return training_losses,validation_losses

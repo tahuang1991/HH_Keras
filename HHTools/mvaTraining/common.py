@@ -8,7 +8,7 @@ import array
 import numpy as np
 import numpy.lib.recfunctions as recfunc
 from ROOT import TChain, TFile, TTree, TH1F
-from root_numpy import tree2array
+from root_numpy import tree2array, array2tree
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle, safe_indexing
 from keras.models import Sequential, Model
@@ -24,7 +24,15 @@ import plotTools
 
 print 'Imported everything in common.py'
 #!INPUT_FOLDER = '/Users/Luca2/Downloads/TEST/HHNTuples/'
-INPUT_FOLDER = '/Users/Luca2/Downloads/TEST/HHNTuples/HHNtuple_20170814_10k/'
+#INPUT_FOLDER = '/Users/Luca2/Downloads/TEST/HHNTuples/HHNtuple_20170814_10k/'
+#INPUT_FOLDER = '/Users/taohuang/Documents/DiHiggs/20170530/20170905_Louvain_10k/20170901_10k_TT_Signal_Louvain/'
+#INPUT_FOLDER = '/Users/taohuang/Documents/DiHiggs/20170530/20170905_Louvain_10k/20170909_10k_Signal_TT_Louvain/'
+#INPUT_FOLDER = '/Users/taohuang/Documents/DiHiggs/20170530/20171021_Louvain/'
+#INPUT_FOLDER = '/Users/taohuang/Documents/DiHiggs/20170530/20171102_Louvain/'
+INPUT_FOLDER = '/Users/taohuang/Documents/DiHiggs/20170530/HHNTuples/'
+treename = "t"
+dataLumi = 35.86
+print 'Input Folder ',INPUT_FOLDER
 
 HAVE_GPU = 'ingrid-ui8' in socket.gethostname()
 
@@ -36,38 +44,49 @@ def format_nonresonant_parameters(param):
 
 backgrounds = [
         {
-#!            'input': 'TTTo2L2Nu_13TeV-powheg_*_histos.root',
-            'input': 'TT.root',
+            'input': 'TTTo2L2Nu_13TeV-powheg_*_histos.root',
+	    #            'input': 'TT_all.root',
         },
 
-#!        {
-#!            'input': 'DYJetsToLL_M-10to50_*_histos.root',
-#!        },
-#!
-#!        {
-#!            'input': 'DYToLL_1J_*_histos.root',
-#!        },
-#!
-#!        {
-#!            'input': 'DYToLL_2J_*_histos.root',
-#!        },
-#!
-#!        {
-#!            'input': 'DYToLL_0J_*_histos.root',
-#!        },
-#!
-#!        {
-#!            'input': 'ST_tW_*_5f_*_13TeV-powheg_*_histos.root',
-#!        },
+        {
+            'input': 'DYJetsToLL_M-10to50_*_histos.root',
+	    #            'input': 'DYM10to50_all.root',
+        },
+
+        {
+            'input': 'DYToLL_1J_*_histos.root',
+	    #            'input': 'DYToLL1J_all.root',
+        },
+
+        {
+	    'input': 'DYToLL_2J_*_histos.root',
+	    #'input': 'DYToLL2J_all.root',
+        },
+
+        {
+	    'input': 'DYToLL_0J_*_histos.root',
+	    #'input': 'DYToLL0J_all.root',
+        },
+
+        {
+	    'input': 'ST_tW_antitop_5f_*_13TeV-powheg_*_histos.root',
+	    #'input': 'sT_top_all.root',
+        },
+
+        {
+	    'input': 'ST_tW_top_5f_*_13TeV-powheg_*_histos.root',
+	    #'input': 'sT_antitop_all.root',
+        },
 
         ]
 
 resonant_signals = {}
-#!resonant_signal_masses = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900]
-resonant_signal_masses = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 800, 900]
+resonant_signal_masses = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900]
+#resonant_signal_masses = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 700, 800, 900]#for graviton
+#resonant_signal_masses = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 800, 900]
 for m in resonant_signal_masses:
-#!    resonant_signals[m] = 'GluGluToRadionToHHTo2B2VTo2L2Nu_M-%d_narrow_*_histos.root' % m
-    resonant_signals[m] = 'radion_M%d.root' % m
+    resonant_signals[m] = 'GluGluToRadionToHHTo2B2VTo2L2Nu_M-%d_narrow_*_histos.root' % m
+    #resonant_signals[m] = 'radion_M%d.root' % m
 
 nonresonant_parameters = [(kl, kt) for kl in [-20, -5, 0.0001, 1, 2.4, 3.8, 5, 20] for kt in [0.5, 1, 1.75, 2.5]]
 
@@ -221,6 +240,23 @@ def skim_arrays(*arrays, **options):
 
     return arrays
 
+def getReweight_to_xsec(tree):
+    n = tree.GetEntry()
+    i = 0
+    reweight = -1.0
+    for i in range(0, 100):
+	tree.GetEntry(i)
+        cross_section = tree.cross_section
+	weisum = tree.event_weight_sum
+	if weisum>0 and reweight <0:
+		reweight = cross_section/weisum
+	elif weisum>0 and reweight>0.0:
+		tmp = cross_section/weisum
+		if abs(tmp-reweight)/reweight>.1:
+			  print "WARNING: cross_section or event_weight_sum may be not a single value reweight1 ",reweight," and now ",tmp
+    return reweight
+
+
 def tree_to_numpy(input_file, variables, weight, cut=None, reweight_to_cross_section=False, n=None):
     """
     Convert a ROOT TTree to a numpy array.
@@ -228,23 +264,28 @@ def tree_to_numpy(input_file, variables, weight, cut=None, reweight_to_cross_sec
 
     file_handle = TFile.Open(input_file)
 
-    tree = file_handle.Get('evtreeHME')
+    tree = file_handle.Get(treename)
 
     cross_section = 1
     relative_weight = 1
     if reweight_to_cross_section:
         print input_file
-        h_xSec = TH1F("h_xSec","",10000,0.,10000); tree.Draw("cross_section>>h_xSec","","nog")
-        cross_section = h_xSec.GetMean()
-        if (h_xSec.GetRMS()/h_xSec.GetMean()>0.0001):
-          print "WARNING: cross_section has not a single value!!! RMS is", h_xSec.GetRMS()
-        h_weiSum = TH1F("h_weiSum","",1000000000,0.,1000000000); tree.Draw("event_weight_sum>>h_weiSum","","nog")
-        if (h_weiSum.GetRMS()/h_weiSum.GetMean()>0.0001):
-          print "WARNING: event_weight_sum has not a single value!!! RMS is", h_weiSum.GetRMS()
-        print cross_section, h_weiSum.GetMean()
-        relative_weight = cross_section / h_weiSum.GetMean()
-        #!cross_section = file_handle.Get('cross_section').GetVal()
-        #!relative_weight = cross_section / file_handle.Get("event_weight_sum").GetVal()
+	#relative_weight = getReweight_to_xsec(tree)
+	#since xsec and total event weight at gen level are included in tree, this can be incoraperated in weight expression
+	#h_xSec = TH1F("h_xSec","",100000,0.,100000); tree.Draw("cross_section>>h_xSec","","nog")
+        #cross_section = h_xSec.GetMean()
+	#print "cross section (mean) ",cross_section," RMS ",h_xSec.GetRMS()
+        #if (h_xSec.GetRMS()/h_xSec.GetMean()>0.0001):
+        #  print "WARNING: cross_section has not a single value!!! RMS is", h_xSec.GetRMS()
+        #h_weiSum = TH1F("h_weiSum","",1000000000,0.,1000000000); tree.Draw("event_weight_sum>>h_weiSum","","nog")
+        #if (h_weiSum.GetRMS()/h_weiSum.GetMean()>0.0001):
+        #  print "WARNING: event_weight_sum has not a single value!!! RMS is", h_weiSum.GetRMS()
+        #relative_weight = cross_section / h_weiSum.GetMean()
+	#print "cross_section and event weight sum, final weight : ",cross_section, h_weiSum.GetMean(), relative_weight
+        cross_section = file_handle.Get('cross_section').GetVal()
+	event_weight_all = file_handle.Get("event_weight_sum").GetVal()
+        relative_weight = cross_section / event_weight_all
+	print "cross_section ",cross_section," eventweightsum ", event_weight_all," reweight ",relative_weight," ,event num ",tree.GetEntries()
 
     if isinstance(weight, dict):
         # Keys are regular expression and values are actual weights. Find the key matching
@@ -282,6 +323,7 @@ def tree_to_numpy(input_file, variables, weight, cut=None, reweight_to_cross_sec
     dataset = a[variables]
     weights = a['weight'] * relative_weight
 
+    print "Expected yield ", np.sum(weights)*dataLumi*1000," for %.2f fb-1 "%dataLumi
     # Convert to plain numpy arrays
     # dataset = dataset.view((dataset.dtype[0], len(variables))).copy()
     dataset = np.array(dataset.tolist(), dtype=np.float32)
@@ -292,8 +334,7 @@ def tree_to_numpy(input_file, variables, weight, cut=None, reweight_to_cross_sec
         weights = weights[:n]
 
     return dataset, weights
-
-
+ 
 class DatasetManager:
     def __init__(self, variables, weight_expression, selection):
         """
@@ -366,6 +407,7 @@ class DatasetManager:
         self.signal_dataset = np.concatenate(datasets)
         self.signal_weights = np.concatenate(weights)
         self.resonant_mass_probabilities = p
+	print "type for self.signal_dataset ", type(self.signal_dataset)
 
         print("Done! Number of Total signal events: %d ; Sum of weights: %.4f" % (len(self.signal_dataset), np.sum(self.signal_weights)))
 
@@ -604,6 +646,17 @@ class DatasetManager:
                     )
 
         print("Done.")
+    def draw_correlations(self, output_dir):
+	print("Plotting input correlation variables...")
+	variables = self.variables[:]
+	output_file1 = "Singal_correlation.pdf"
+	output_file2 = "Background_correlation.pdf"
+	
+	plotTools.drawCorrelation(variables, self.signal_dataset, self.signal_weights, output_dir, output_file1)
+	plotTools.drawCorrelation(variables, self.background_dataset, self.background_weights, output_dir, output_file2)
+	#plotTools.drawCorrelations(self.variables[:], self.signal_dataset, output_file1, output_dir)
+
+
 
     def compute_shift_values(self, parameters_list):
         shift = [abs(min(x)) if min(x) < 0 else 0 for x in zip(*parameters_list)]
@@ -646,6 +699,7 @@ class DatasetManager:
 def get_file_from_glob(f):
     files = glob.glob(f)
     if len(files) != 1:
+	print "files ",files
         raise Exception('Only one input file is supported per glob pattern: %s -> %s' % (f, files))
     return files[0]
 
@@ -743,6 +797,7 @@ def draw_resonant_training_plots(model, dataset, output_folder, split_by_mass=Fa
         os.makedirs(output_input_plots)
 
     dataset.draw_inputs(output_input_plots)
+    dataset.draw_correlations(output_folder)
 
     training_dataset, training_targets = dataset.get_training_combined_dataset_and_targets()
     training_weights = dataset.get_training_combined_weights()
