@@ -32,7 +32,7 @@ print 'Imported everything in common.py'
 INPUT_FOLDER = '/Users/taohuang/Documents/DiHiggs/20170530/HHNTuples/'
 treename = "t"
 dataLumi = 35.86
-print 'Input Folder ',INPUT_FOLDER
+print 'Input Folder for training in common.py ',INPUT_FOLDER
 
 HAVE_GPU = 'ingrid-ui8' in socket.gethostname()
 

@@ -6,6 +6,8 @@ import keras
 from math import sqrt
 import numpy.lib.recfunctions as recfunctions
 from common import *
+import sys
+sys.argv.append( '-b-' )
 import ROOT
 
 import warnings
@@ -19,7 +21,6 @@ ROOT.gROOT.Reset()
 #ROOT.gStyle.SetStatW(0.07)
 #ROOT.gStyle.SetStatH(0.06)
 
-#ROOT.gStyle.SetOptStat(0)
 
 #ROOT.gStyle.SetErrorX(0)
 #ROOT.gStyle.SetErrorY(0)
@@ -44,7 +45,7 @@ ROOT.gROOT.Reset()
 def writeNNToTree(input_file, weight, modellist, modelLUT, sampletype, masslist, outFile):
     isSignal = (sampletype<13 or sampletype>=100)
     cut = "(91 - ll_M) > 15.0"
-    FullInputs = ['jj_pt', 'll_pt', 'll_M', 'll_DR_l_l', 'jj_DR_j_j', 'llmetjj_DPhi_ll_jj', 'llmetjj_minDR_l_j', 'llmetjj_MTformula','mt2', 'jj_M','isSF','hme_h2mass_reco','isElEl','isElMu','isMuEl','isMuMu','cross_section','event_weight_sum']
+    FullInputs = ['jj_pt', 'll_pt', 'll_M', 'll_DR_l_l', 'jj_DR_j_j', 'llmetjj_DPhi_ll_jj', 'llmetjj_minDR_l_j', 'llmetjj_MTformula','mt2', 'jj_M','isSF','hme_h2mass_reco','isElEl','isElMu','isMuEl','isMuMu','met_pt','cross_section','event_weight_sum']
     #dataset, weight = tree_to_numpy(f, FullInputs, weight_expression, cut, reweight_to_cross_section=False)
     file_handle = TFile.Open(input_file)
 
@@ -146,6 +147,50 @@ def writeNNToTree(input_file, weight, modellist, modelLUT, sampletype, masslist,
     
     ch_new.GetCurrentFile().Write() 
     ch_new.GetCurrentFile().Close()
+
+def expectedSensitivity(hist_s, hist_b):
+    xbins = hist_s.GetNbinsX() 
+    hist_out = hist_s.Clone()
+    for i in range (1, xbins+1):
+        nsignal = hist_s.Integral(i, xbins)
+        nbg = hist_b.Integral(i, xbins)
+        if nbg <= .0000001:
+            hist_out.SetBinContent(i, 5.0)
+            hist_out.SetBinError(i, 5.0)
+            continue
+        hist_out.SetBinContent(i, nsignal/sqrt(nbg))
+        error = sqrt(nsignal/nbg + (1.0/4.0)*nsignal*nsignal/(nbg*nbg))
+        hist_out.SetBinError(i, error)
+    return hist_out
+
+
+def expectedSensitivity_Louvain(hist_s, hist_b):
+    xbins = hist_s.GetNbinsX() 
+    hist_out = hist_s.Clone()
+    truenbins = (xbins)/3
+    #controlregion1 = 25-3
+    #controlregion2 = 50-6+1
+    controlregion1 = truenbins
+    controlregion2 = truenbins*2+1
+    #print "expectedSensitivity_Louvain, controlregion1 ",controlregion1, " ", hist_s.GetBinCenter(controlregion1)," controlregion2 ",controlregion2," ", hist_s.GetBinCenter(controlregion2)
+
+    for i in range (1, xbins+1):
+        if i<= controlregion1 or i>= controlregion2:
+            hist_out.SetBinContent(i,0)
+            hist_out.SetBinError(i,0)
+            continue
+        nsignal = hist_s.Integral(i, controlregion2-1)
+        nbg = hist_b.Integral(i, controlregion2-1)
+        #print "i ",i ," bincenter ", hist_s.GetBinCenter(i)-controlregion1*0.04, " nbg ",nbg, " nsignal ", nsignal, " s over sqrt(B) ",nsignal/sqrt(nbg)
+        if nbg <= .0000001:
+            hist_out.SetBinContent(i, 5.0)
+            hist_out.SetBinError(i, 5.0)
+            continue
+        hist_out.SetBinContent(i, nsignal/sqrt(nbg))
+        error = sqrt(nsignal/nbg + (1.0/4.0)*nsignal*nsignal/(nbg*nbg))
+        hist_out.SetBinError(i, error)
+    return hist_out
+
 
 def bestSensitivityNNWP(ch_signal, ch_bg, todraw, nbins, cuts_signal, cuts_bg, mass, outputdir):
     histbg = ROOT.TH1F("histbg","histbg",nbins, 0.0, 1.0)
@@ -250,6 +295,13 @@ def hist1D(ch_signal, ch_bg, todraw, bins, xtitle, cuts_signallist, cuts_bglist,
     c1.SaveAs(plotname+".C")
     c1.SaveAs(plotname+".pdf")
 
+def fixhist2D(hist):
+    xnbins = hist.GetNbinsX() 
+    ynbins = hist.GetNbinsY() 
+    for i in range(xnbins):
+        for j in range(ynbins):
+            if hist.GetBinContent(i, j)<0.0:
+                hist.SetBinContent(i, j, 0.0)
 def hist2D(ch, todraw, xbins, ybins, cuts, title, xtitle, ytitle, tex, plotname):
     c1 = ROOT.TCanvas()
     c1.Clear()
@@ -343,31 +395,192 @@ channelcuts = {"MuMu":{"cut":"isMuMu","extraweight": 24827.9/23891.14, "latex":"
 		"ElEl":{"cut":"isElEl","extraweight":8487.6/12190.1, "latex":"ee"},
 		}
 ###
-def histForlimits1D(backgrounddict, bgnames, filesignal, mass, todraw, cut, xbins,  outfile, plotname):
+def histForlimits1D(backgrounddict, bgnames, filesignal, mass, todraw, cut, xbins, xtitle, suffix, outfile, plotname):
+
+    if len(xbins) == 3:
+        nbins = xbins[0]; xmin = xbins[1]; xmax =  xbins[2]
+        xbins = []
+        binwidth = (xmax-xmin)/nbins
+        for i in range(0, nbins+1):
+            xbins.append(xmin + i*binwidth)
+        xbins = np.asarray(xbins)
+    nnout = outfile.split("_")[-1][:-5]
+    LouvainPlot = True
+    #if (not LouvainPlot):
+    #    nnout = ''
+        
+    #print "nnout ",nnout
     chlist = {}
     colors = [628, 596, 820, 432, 418]
+    treename = "evtreeHME_nn"
+    #treename = "t"
     for key in backgrounddict:
-	ch = ROOT.TChain("evtreeHME_nn")
+	ch = ROOT.TChain(treename)
 	for f in backgrounddict[key]:
 	    ch.Add(f)
 	chlist[key] = ch
-    ch_s =  ROOT.TChain("evtreeHME_nn"); ch_s.Add(filesignal)
+    ch_s =  ROOT.TChain(treename); ch_s.Add(filesignal)
     rfile = ROOT.TFile(outfile, "UPDATE")
+    xsec_signal = 1.0
     weight = "(35.87*1000*cross_section/event_weight_sum)*final_total_weight"
-    weight_s = "(35.87*1000*5.0/event_weight_sum)*final_total_weight"
+    weight_s = "(35.87*1000*{xsec}/event_weight_sum)*final_total_weight".format(xsec = xsec_signal)
     for channel in channelcuts:
 	allhists = []
-        hs = ROOT.THStack("allbg_M%d"%mass+channel, "  ")
-        legend = ROOT.TLegend(0.7,0.65,0.88,0.65+len(backgrounddict)*.06); 
+        hs = ROOT.THStack("allbg_"+channel+"_"+suffix, "  ")
+        legend = ROOT.TLegend(0.7,0.65,0.88,0.68+len(backgrounddict)*.06); 
 	legend.SetTextSize(0.045); legend.SetTextFont(62)
         #legend.SetHeader("DNN training: kinematics+")
 	BGSum = 0.0
-
-	hist_data_fake = ROOT.TH1F("data_obs_"+channel+"_M%d"%mass, "data_obs_"+channel+"_M%d"%mass, xbins[0], xbins[1], xbins[2])
+        maxbgbin = 0.0
+        #hist_data_fake = ROOT.TH1F("data_obs_"+channel+"_M%d_%s"%(mass, suffix), "data_obs_"+channel+"_M%d_%s"%(mass, suffix), len(xbins)-1, xbins)
+	hist_data_fake = ROOT.TH1F("data_obs_"+channel+"_%s"%(suffix), "data_obs_"+channel+"_%s"%( suffix), len(xbins)-1, xbins)
 	for i, key in enumerate(bgnames):
-	    hist = ROOT.TH1F(key+"_"+channel+"_M%d"%mass, key+"_"+channel+"_M%d"%mass, xbins[0], xbins[1], xbins[2])
+	    hist = ROOT.TH1F(key+"_"+channel+"_%s"%(suffix), key+"_"+channel+"_%s"%(suffix), len(xbins)-1, xbins)
 	    finalcut = "("+ cut + " && "+ channelcuts[channel]["cut"] +")*"+weight+"*%f"%(channelcuts[channel]["extraweight"])
+            print "todraw ",todraw," finalcut ",finalcut
 	    chlist[key].Draw(todraw + ">> " + hist.GetName(), finalcut)
+	    hs.Add(hist)
+	    hist.SetFillColor(colors[i])
+	    allhists.append(hist)
+	    print "mass ",mass, " channel ", channel," bg ",key," rate ",hist.Integral()
+            #if key == "TT":
+            #    maxbgbin = hist.GetBinContent(hist.GetMaximumBin())
+	    BGSum = BGSum + hist.Integral()
+	    hist_data_fake.Add(hist)
+	#for hist,name in zip(reversed(allhists), reversed(bgnames)):
+	for i in range(len(allhists)):
+	    legend.AddEntry(allhists[len(allhists)-i-1], bgnames[len(allhists)-i-1], "f")
+	    allhists[len(allhists)-i-1].Write()
+	hs.Write()
+	
+        hist_s = ROOT.TH1F("signal_"+channel+"_%s"%(suffix), "signal_"+channel+"_%s"%( suffix), len(xbins)-1, xbins)
+	finalcut_s  = "("+ cut + " && "+ channelcuts[channel]["cut"] +")*"+weight_s+"*%f"%(channelcuts[channel]["extraweight"])
+	ch_s.Draw(todraw + ">> " + hist_s.GetName(), finalcut_s)
+        #hist_data_fake.Add(hist_s)
+        maxbgbin = hist_data_fake.GetBinContent(hist_data_fake.GetMaximumBin())
+        maxsignalbin = hist_s.GetBinContent(hist_s.GetMaximumBin())
+        if maxsignalbin>maxbgbin:
+            hs.SetMaximum(maxsignalbin*1.4)
+        else:
+            hs.SetMaximum(maxbgbin*1.3)
+
+	print "mass ",mass, " channel ", channel," rate:signal ",hist_s.Integral()," BG(TT,DY,sT) ",BGSum," data(fake) ",hist_data_fake.Integral()
+
+	hist_s.SetLineColor(1)
+	hist_s.SetLineWidth(2)
+	hist_s.Write()
+	hist_data_fake.Write()
+        if ( LouvainPlot):
+            hist_sensitivity = expectedSensitivity_Louvain(hist_s, hist_data_fake)
+        else:
+            hist_sensitivity = expectedSensitivity(hist_s, hist_data_fake)
+
+        hist_sensitivity.SetName("Sensitivity_"+channel+"_M%d"%mass)
+        ens = legend.AddEntry(hist_s, "#splitline{Signal}{M=%d, %dpb}"%(mass, xsec_signal), "l")
+	ens.SetTextSize(.03)
+
+        c1 = ROOT.TCanvas("c", "canvas", 800, 800)
+        c1.Clear()
+        pad1 = ROOT.TPad("pad1", "pad1", 0, 0.3, 1, 1.0)
+        pad1.SetBottomMargin(.0)
+        pad1.Draw()
+        pad1.cd()
+	hs.Draw("hist")
+	hist_s.Draw("samehist")
+	
+	tex1 = ROOT.TLatex(0.17,0.8, channelcuts[channel]["latex"]+" channel, "+nnout)
+	tex1.SetNDC(); tex1.SetTextSize(.045)
+	tex2 = ROOT.TLatex(0.19,0.6, "M_{jj}<75 GeV "+"  "*12+" 75 GeV <=M_{jj}<140 GeV"+ "  "*12+" M_{jj} >= 140 GeV")
+	tex2.SetNDC(); tex2.SetTextSize(.043)
+	tex1.Draw("same")
+        if ( LouvainPlot):
+           tex2.Draw("same")
+	#hs.GetHistogram().SetTitle(" #scale[1.4]{#font[61]{CMS}} Simulation Preliminary"+"  "*38+"35.87 fb^{-1} (13 TeV),2016")
+        #hs.GetHistogram().SetTitle("")
+	#hs.GetHistogram().SetTitleSize(.04)
+	#hs.GetHistogram().SetTitleOffset(1.2)
+	tex0 = ROOT.TLatex(0.1,0.92, " #scale[1.4]{#font[61]{CMS}} Simulation Preliminary"+"  "*24+"35.87 fb^{-1} (13 TeV),2016")
+	tex0.SetNDC(); tex0.SetTextSize(.05); tex0.SetTextFont(42)
+	tex0.Draw("same")
+        #hs.GetHistogram().GetXaxis().SetTitle("DNN output, M_{jj} bins")
+        #hs.GetHistogram().GetXaxis().SetTitle(xtitle)
+        hs.GetHistogram().GetYaxis().SetTitle("Events")
+        legend.Draw("same")
+	#tex.Draw("same")
+
+        c1.cd()
+        c1.Update()
+        pad2 = ROOT.TPad("pad2", "pad2", 0, 0.0, 1, .29)
+        pad2.SetTopMargin(0.)
+        pad2.SetBottomMargin(.35)
+        pad2.SetTicks(1,1)#draw x, y axis on both side (left right for y, and bottom up for x)
+        pad2.Draw()
+        pad2.cd()
+        hist_sensitivity.Draw("ep")
+        hist_sensitivity.SetStats(0)
+        hist_sensitivity.SetTitle("")
+
+        hist_sensitivity.GetXaxis().SetTitle(xtitle)
+        hist_sensitivity.GetXaxis().SetTitleSize(20)
+        hist_sensitivity.GetXaxis().SetTitleFont(43)
+        hist_sensitivity.GetXaxis().SetTitleOffset(3.0)
+        hist_sensitivity.GetXaxis().SetLabelSize(15)
+        hist_sensitivity.GetXaxis().SetLabelFont(43)#Absolute font size in pixel (precision 3)
+        hist_sensitivity.GetYaxis().SetTitle("S/#sqrt{B}")
+        hist_sensitivity.GetYaxis().SetNdivisions(505)
+        hist_sensitivity.GetYaxis().CenterTitle()
+        hist_sensitivity.GetYaxis().SetTitleSize(20)
+        hist_sensitivity.GetYaxis().SetTitleFont(43)
+        hist_sensitivity.GetYaxis().SetTitleOffset(.9)
+        hist_sensitivity.GetYaxis().SetLabelSize(15)
+        hist_sensitivity.GetYaxis().SetLabelFont(43)#Absolute font size in pixel (precision 3)
+
+
+        c1.SaveAs(plotname+"_Radion_"+channel+"_"+suffix+".C")
+        #c1.SaveAs(plotname+"_Radion_"+channel+".png")
+        c1.SaveAs(plotname+"_Radion_"+channel+"_"+suffix+".pdf")
+        #rfile.Close()
+        print "done with histForlimits1D"
+	
+
+###
+def histForlimits2D(backgrounddict, bgnames, filesignal, mass, xtodraw, ytodraw, cut, xbins, ybins, xtitle, ytitle, outfile, plotname):
+    chlist = {}
+    colors = [628, 596, 820, 432, 418]
+    treename = "evtreeHME_nn"
+    for key in backgrounddict:
+	ch = ROOT.TChain(treename)
+	for f in backgrounddict[key]:
+	    ch.Add(f)
+	chlist[key] = ch
+    ch_s =  ROOT.TChain(treename); ch_s.Add(filesignal)
+    rfile = ROOT.TFile(outfile, "UPDATE")
+    xsec_signal = 1.0
+    weight = "(35.87*1000*cross_section/event_weight_sum)*final_total_weight"
+    weight_s = "(35.87*1000*{xsec}/event_weight_sum)*final_total_weight".format(xsec = xsec_signal)
+    todraw = ytodraw +":"+ xtodraw
+    hist_0 = ROOT.TH2F("hist_0","", xbins[0], xbins[1], xbins[2], ybins[0], ybins[1], ybins[2])
+    fixhist2D(hist_0)
+    
+    for channel in channelcuts:
+	allhists = []
+        hs = ROOT.THStack("allbg_M%d"%mass+channel, "  ")
+        #legend = ROOT.TLegend(0.4,0.65,0.58,0.65+len(backgrounddict)*.06); 
+        legend = ROOT.TLegend(0.4,0.7,0.5,0.75+len(backgrounddict)*.06); 
+	legend.SetTextSize(0.045); legend.SetTextFont(62)
+        #legend.SetHeader("DNN training: kinematics+")
+	BGSum = 0.0
+        maxbgbin = 0.0
+	hist_data_fake = ROOT.TH2F("data_obs_"+channel+"_M%d"%mass, "data_obs_"+channel+"_M%d"%mass, xbins[0], xbins[1], xbins[2], ybins[0], ybins[1], ybins[2])
+	for i, key in enumerate(bgnames):
+	    hist = ROOT.TH2F(key+"_"+channel+"_M%d"%mass, key+"_"+channel+"_M%d"%mass, xbins[0], xbins[1], xbins[2], ybins[0], ybins[1], ybins[2])
+	    finalcut = "("+ cut + " && "+ channelcuts[channel]["cut"] +")*"+weight+"*%f"%(channelcuts[channel]["extraweight"])
+            print "todraw ",todraw," finalcut ",finalcut
+	    chlist[key].Draw(todraw + ">> " + hist.GetName(), finalcut)
+            if key == "DY":
+                fixhist2D(hist)
+            if key == "TT":
+                maxbgbin = hist.GetBinContent(hist.GetMaximumBin())*1.05
 	    hs.Add(hist)
 	    hist.SetFillColor(colors[i])
 	    allhists.append(hist)
@@ -379,110 +592,172 @@ def histForlimits1D(backgrounddict, bgnames, filesignal, mass, todraw, cut, xbin
 	    legend.AddEntry(allhists[len(allhists)-i-1], bgnames[len(allhists)-i-1], "f")
 	    allhists[len(allhists)-i-1].Write()
 	hs.Write()
+        
 	
-        hist_s = ROOT.TH1F("signal_"+channel+"_M%d"%mass, "signal_"+channel+"_M%d"%mass, xbins[0], xbins[1], xbins[2])
+        hist_s = ROOT.TH2F("signal_"+channel+"_M%d"%mass, "signal_"+channel+"_M%d"%mass, xbins[0], xbins[1], xbins[2], ybins[0], ybins[1], ybins[2])
 	finalcut_s  = "("+ cut + " && "+ channelcuts[channel]["cut"] +")*"+weight_s+"*%f"%(channelcuts[channel]["extraweight"])
 	ch_s.Draw(todraw + ">> " + hist_s.GetName(), finalcut_s)
-	hist_data_fake.Add(hist_s)
+        #hist_data_fake.Add(hist_s)
+        maxsignalbin = hist_s.GetBinContent(hist_s.GetMaximumBin())
+
+        if maxsignalbin>maxbgbin:
+            hs.SetMaximum(maxsignalbin*1.4)
+        else:
+            hs.SetMaximum(maxbgbin*1.3)
+        hs.SetMinimum(0.0)
+
 	print "mass ",mass, " channel ", channel," rate:signal ",hist_s.Integral()," BG(TT,DY,sT) ",BGSum," data(fake) ",hist_data_fake.Integral()
-	hist_s.SetLineColor(1)
+        if hist_data_fake.GetEntries() <= 0:
+            print "hist_data_fake entries is not greater than 0!!! error !!"
+            raise ValueError
+        #hist_s.SetLineColor(400)
+        hist_s.SetFillColor(612)
 	hist_s.SetLineWidth(2)
+        hist_s.SetStats(0)
+        hist_s.GetXaxis().SetTitle(xtitle)
+        hist_s.GetXaxis().SetTitleOffset(1.5)
+        hist_s.GetXaxis().CenterTitle()
+        hist_s.GetYaxis().SetTitle(ytitle)
+        hist_s.GetYaxis().SetTitleOffset(1.5)
+        hist_s.GetYaxis().CenterTitle()
+        hist_data_fake.SetStats(0)
+        hist_data_fake.GetXaxis().SetTitle(xtitle)
+        hist_data_fake.GetXaxis().SetTitleOffset(1.5)
+        hist_data_fake.GetXaxis().CenterTitle()
+        hist_data_fake.GetYaxis().SetTitle(ytitle)
+        hist_data_fake.GetYaxis().SetTitleOffset(1.5)
+        hist_data_fake.GetYaxis().CenterTitle()
 	hist_s.Write()
 	hist_data_fake.Write()
-        ens = legend.AddEntry(hist_s, "Signal, M=%d"%mass, "l")
+        ens = legend.AddEntry(hist_s, "#splitline{Signal}{M=%d, %dpb}"%(mass, xsec_signal), "f")
 	ens.SetTextSize(.03)
 
-        c1 = ROOT.TCanvas()
+        c1 = ROOT.TCanvas("c1","c1",800, 400)
         c1.Clear()
-	hs.Draw("hist")
-	hist_s.Draw("samehist")
+        c1.Divide(2)
+        c1.cd(1)
+	hs.Draw("LEGO1 0")
 	
-	tex1 = ROOT.TLatex(0.17,0.8, channelcuts[channel]["latex"]+" channel")
+	tex1 = ROOT.TLatex(0.17,0.85, channelcuts[channel]["latex"]+" channel")
 	tex1.SetNDC(); tex1.SetTextSize(.045)
 	tex2 = ROOT.TLatex(0.19,0.5, "M_{jj}<75 GeV "+"  "*5+" 75 GeV <=M_{jj}<140 GeV"+ "  "*5+" M_{jj} >= 140 GeV")
 	tex2.SetNDC(); tex2.SetTextSize(.033)
-	tex1.Draw("same")
-	tex2.Draw("same")
+        #tex1.Draw("same")
+        #tex2.Draw("same")
 	#hs.GetHistogram().SetTitle(" #scale[1.4]{#font[61]{CMS}} Simulation Preliminary"+"  "*38+"35.87 fb^{-1} (13 TeV),2016")
-	hs.GetHistogram().SetTitle("")
+        channelname = channelcuts[channel]["latex"]+" channel"
+	hs.SetTitle("Background, "+channelname)
 	#hs.GetHistogram().SetTitleSize(.04)
 	#hs.GetHistogram().SetTitleOffset(1.2)
 	tex0 = ROOT.TLatex(0.1,0.91, " #scale[1.4]{#font[61]{CMS}} Simulation Preliminary"+"  "*14+"35.87 fb^{-1} (13 TeV),2016")
 	tex0.SetNDC(); tex0.SetTextSize(.04); tex0.SetTextFont(42)
-	tex0.Draw("same")
-        hs.GetHistogram().GetXaxis().SetTitle("DNN output, M_{jj} bins")
-	hs.GetHistogram().GetYaxis().SetTitle("Events")
+        #tex0.Draw("same")
+        #hs.GetHistogram().GetXaxis().SetTitle("DNN output, M_{jj} bins")
+        hs.GetHistogram().GetXaxis().SetTitle(xtitle)
+        hs.GetHistogram().GetXaxis().SetTitleOffset(1.5)
+        hs.GetHistogram().GetXaxis().CenterTitle()
 
+	hs.GetHistogram().GetYaxis().SetTitle(ytitle)
+        hs.GetHistogram().GetYaxis().SetTitleOffset(1.5)
+        hs.GetHistogram().GetYaxis().CenterTitle()
+
+        c1.cd(2)
+        hs_s = ROOT.THStack("hs_s","Signal, "+channelname)
+        #hist_0.SetFillColor(596)
+        hs_s.Add(hist_s)
+        #hs_s.Add(hist_0)
+        hs_s.Draw("LEGO1 0")
+        hs_s.GetHistogram().GetXaxis().SetTitle(xtitle)
+        hs_s.GetHistogram().GetXaxis().SetTitleOffset(1.5)
+        hs_s.GetHistogram().GetXaxis().CenterTitle()
+
+	hs_s.GetHistogram().GetYaxis().SetTitle(ytitle)
+        hs_s.GetHistogram().GetYaxis().SetTitleOffset(1.5)
+        hs_s.GetHistogram().GetYaxis().CenterTitle()
         c1.Update()
+        c1.cd()
 
         legend.Draw("same")
 	#tex.Draw("same")
         c1.SaveAs(plotname+"_RadionM%d_"%mass+channel+".C")
         c1.SaveAs(plotname+"_RadionM%d_"%mass+channel+".pdf")
+
+        c2 = ROOT.TCanvas("c2","c2",800, 400)
+        c2.Clear()
+        c2.Divide(2,1)
+        c2.cd(1)
+        #hs.SetTitle("Background, "+channelname)
+        hist_data_fake.SetMinimum(0.0)
+        #hist_data_fake.SetMaximum()
+        hist_data_fake.Draw("colz")
+        hist_data_fake.SetTitle("Background, "+channelname)
+        c2.cd(2)
+        hist_s.Draw("colz")
+        hist_s.SetTitle("Signal, "+channelname)
+        c2.SaveAs(plotname+"_RadionM%d_"%mass+channel+"_2plots.C")
+        c2.SaveAs(plotname+"_RadionM%d_"%mass+channel+"_2plots.pdf")
+        
+
 	
-	     
 
-
-    
-    
 
 #filepath = "/Users/taohuang/Documents/DiHiggs/20170530/20171021_Louvain/"
 #filepath = "/Users/taohuang/Documents/DiHiggs/20170530/testfile/"
 filepath = "/Users/taohuang/Documents/DiHiggs/20170530/20171102_Louvain/"
 #outdir = "/Users/taohuang/Documents/DiHiggs/20170530/20171021_Louvain_addNN/"
 outdir = filepath
-suffix = 'addNN'
-output_suffix = '{:%Y-%m-%d}_{}'.format(datetime.date.today(), suffix)
-#output_suffix = '2017-11-08_addNN'
+suffix = 'Louvaintraining_addNN'
+#output_suffix = '{:%Y-%m-%d}_{}'.format(datetime.date.today(), suffix)
+output_suffix = '2017-12-05_addNN'
 output_folder = os.path.join(outdir, output_suffix)
 if not os.path.exists(output_folder):
     os.makedirs(output_folder)
 
-#modellist = ['MTonly']
-modellist = ['MTonly','MT2only','MTandMT2','MTandMT2_MJJ','MTandMT2_HME','MTandMT2_HMEMJJ', 'MTandMJJ']
-modellist = ['MTonly','MTandMJJ']
+modellist = ['MTonly']
+#modellist = ['MTonly','MT2only','MTandMT2','MTandMT2_MJJ','MTandMT2_HME','MTandMT2_HMEMJJ', 'MTandMJJ']
+#modellist = ['MTonly','MTandMJJ']
 allfiles = os.listdir(filepath)
 #allfiles = ['TT_all.root']
 def makeNtuple_prediction(masses):
      
     for f in allfiles:
 	if f.endswith(".root"):
-		name = f.split('.')[0]
-		outname = ''
-		try:
-			sampletype =  SampleTypeLUT.sampletypedict[name]
-		except KeyError:
-			##background
-			sampletype =  SampleTypeLUT.sampletypedict[name[:-4]]
-			#outname = name+"_addNN_M%s.root"%mass
-		#addsampleType(filepath+f, sampletype, name+"_addType.root")
-		#weight = "event_weight * trigeff * jjbtag_heavy * jjbtag_light * llidiso * pu"
-		weight = "total_weight"
-		if name.startswith("DY"):
-			weight = weight+"* dy_nobtag_to_btagM_weight"
-		print 'file ',file,' name ',name,' type ',type(sampletype)," sampletype ",sampletype," weight ",weight
-		if sampletype>=100:
-		    outname = name+"_addNN.root"
-		    output_file = os.path.join(output_folder, outname)		
-		    mass = SampleTypeLUT.getSignalMass(sampletype)
-		    writeNNToTree(filepath+f, weight, modellist, SampleTypeLUT.ModelLUT, sampletype, [mass], output_file)
-		else:
-			#for mass in masses:
-		    #outname = name+"_addNN_M%s.root"%mass
-		    outname = name+"_addNN.root"
-		    output_file = os.path.join(output_folder, outname)		
-		    writeNNToTree(filepath+f, weight, modellist, SampleTypeLUT.ModelLUT, sampletype, masses, output_file)
+            name = f.split('.')[0]
+	    outname = ''
+	    try:
+	    	sampletype =  SampleTypeLUT.sampletypedict[name]
+	    except KeyError:
+	    	##background
+	    	sampletype =  SampleTypeLUT.sampletypedict[name[:-4]]
+	    	#outname = name+"_addNN_M%s.root"%mass
+	    #addsampleType(filepath+f, sampletype, name+"_addType.root")
+	    #weight = "event_weight * trigeff * jjbtag_heavy * jjbtag_light * llidiso * pu"
+	    weight = "total_weight"
+	    if name.startswith("DY"):
+	    	weight = weight+"* dy_nobtag_to_btagM_weight"
+	    print 'file ',file,' name ',name,' type ',type(sampletype)," sampletype ",sampletype," weight ",weight
+	    if sampletype>=100:
+	        outname = name+"_addNN.root"
+	        output_file = os.path.join(output_folder, outname)		
+	        mass = SampleTypeLUT.getSignalMass(sampletype)
+	        writeNNToTree(filepath+f, weight, modellist, SampleTypeLUT.ModelLUT, sampletype, [mass], output_file)
+	    else:
+	    	#for mass in masses:
+	        #outname = name+"_addNN_M%s.root"%mass
+	        outname = name+"_addNN.root"
+	        output_file = os.path.join(output_folder, outname)		
+	        writeNNToTree(filepath+f, weight, modellist, SampleTypeLUT.ModelLUT, sampletype, masses, output_file)
 
 
 
 #makeNtuple_prediction([260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900])
 #makeNtuple_prediction([260, 350, 400, 500])
 
-nnlist = ["nnout_MTonly", "nnout_MT2only","nnout_MTandMT2","nnout_MTandMT2_MJJ","nnout_MTandMT2_HME","nnout_MTandMT2_HMEMJJ","nnout_MTandMJJ"]
-nnlist = ["nnout_MTonly", "nnout_MTandMJJ"]
+#nnlist = ["nnout_MTonly", "nnout_MT2only","nnout_MTandMT2","nnout_MTandMT2_MJJ","nnout_MTandMT2_HME","nnout_MTandMT2_HMEMJJ","nnout_MTandMJJ"]
+#nnlist = ["nnout_MTonly", "nnout_MTandMJJ"]
 #nnlist = ["nnout_MTonly"]
 #plotdir = "plotsafterDNN/"
-def makeplots(nnlist, plotdir, masspoints):
+def makeSBplots(nnlist, plotdir, masspoints):
     os.system("mkdir -p "+plotdir)
     #masspoints = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 800, 900]
     #colors = [632, 600, 618, 418, 434, 802]
@@ -501,20 +776,136 @@ def makeplots(nnlist, plotdir, masspoints):
 		thisnnlist.append(nn+"_M%d"%mass)
         plotSB(file_slist, file_blist, thisnnlist, colors, title, mass, plotdir, "radion_M%d"%mass)
 
-#makeplots(nnlist, "plotsafterDNN_splitted_20171102_test/", [270, 750])
-#makeplots(nnlist, "plotsafterDNN_splitted_20171102/", [260, 350, 400, 500])
+#makeSBplots(nnlist, "plotsafterDNN_splitted_20171102_test/", [270, 750])
+#makeSBplots(nnlist, "plotsafterDNN_splitted_20171102/", [260, 350, 400, 500])
 
-def makeLouvainLimithist(masspoints, nnout, outdir):
-    bgnames = ["sT","DY","TT"]
-    outfile = os.path.join(outdir, "Hhh_FinalBGYield_%s.root"%nnout)
-    plotname = os.path.join(outdir, "Hhh_FinalBGYield_%s"%nnout)
+
+def makeBackgroundshist(filefolder, masspoints, variable, nbins, xtitle, outdir):
+
+    bgnames = ["ST","DY","TT"]
+    outfile = os.path.join(outdir, "Backgrounds_signal_allinputs.root")
+    plotname = os.path.join(outdir, "Kinematics_%s"%variable)
     ###create tfile
     tfile = ROOT.TFile(outfile, "RECREATE")
     tfile.Close()
-    cut = "1"
-    nnbins = [75, 0.0, 3.0] 
+    todraw = variable
     for mass in masspoints:
-        todraw = "({nnout}_M{mass}*(jj_M<75)+(jj_M>=75 && jj_M<140)*({nnout}_M{mass}+1)+(jj_M>=140)*({nnout}_M{mass}+2))".format(nnout = nnout, mass=mass)
+        cut = "1"
+        #todraw = "(({nnout}_M{mass}-3.0/25)*(jj_M<75 && {nnout}_M{mass}>3.0/25)+(jj_M>=75 && jj_M<140 && {nnout}_M{mass}>3.0/25)*({nnout}_M{mass}+1-6.0/25)+(jj_M>=140 && {nnout}_M{mass}>3.0/25)*({nnout}_M{mass}+2-9.0/25))".format(nnout = nnout, mass=mass)
+        file_s = os.path.join(output_folder, "radion_M%d_addNN.root"%(mass))
+        backgrounddict = {}
+        """
+        for bgname in bgnames:
+            backgrounddict[bgname] = []
+	file_s = os.path.join(filefolder, "radion_M%d_addNN.root"%(mass))
+        for background in backgrounds:
+            bginput = background['input']
+            files = get_files_from_glob(os.path.join(INPUT_FOLDER, background['input']))
+            bgname = bginput[:2]
+            print "bginput ",bginput," bgname ",bgname, " files ", files
+            backgrounddict[bgname]  = backgrounddict[bgname]  + files
+        for bgname in bgnames:
+            print "bgname ",bgname, " files ",backgrounddict[bgname]
+
+        """
+	for bg in bgnames:
+	    allfiles = os.listdir(filefolder)
+	    backgrounddict[bg] = []
+	    for f in allfiles:
+		if f.startswith(bg) and f.endswith(".root"):
+		   backgrounddict[bg].append(os.path.join(filefolder, f))
+        suffix = ''
+        histForlimits1D(backgrounddict, bgnames, file_s, mass, todraw, cut, nbins, xtitle, suffix, outfile, plotname)
+
+variablesdir = "Background_signal_xsec5pb_MTonlyLouvainTraining"
+os.system("mkdir -p "+variablesdir)
+varibales = ['jj_pt', 'll_pt', 'll_M', 'll_DR_l_l', 'jj_DR_j_j', 'llmetjj_DPhi_ll_jj', 'llmetjj_minDR_l_j', 'llmetjj_MTformula','mt2', 'jj_M','hme_h2mass_reco']
+#variables = ['lep1_pt']
+#makeBackgroundshist(output_folder, [400], 'llmetjj_MTformula', [50, 0.0, 500.0],"MT", variablesdir)
+def plotallkinematics():
+    print "Ntuple folder ",output_folder
+    makeBackgroundshist(output_folder, [400], 'll_M', [50, 12.0, 76.0], "M_{ll}", variablesdir)
+    makeBackgroundshist(output_folder, [400], 'll_DR_l_l', [50, .0, 6.0], "#DeltaR_{ll}", variablesdir)
+    makeBackgroundshist(output_folder, [400], 'jj_M', [50, 0.0, 400.0], "M_{jj}",variablesdir)
+    makeBackgroundshist(output_folder, [400], 'jj_DR_j_j', [50, .0, 6.0], "#DeltaR_{jj}",variablesdir)
+    makeBackgroundshist(output_folder, [400], 'llmetjj_DPhi_ll_jj', [24, .0, 3.1415926],"#Delta#phi(ll,jj)", variablesdir)
+    makeBackgroundshist(output_folder, [400], 'll_pt', [50, 0.0, 450.0], "Dilepton p_{T}", variablesdir)
+    makeBackgroundshist(output_folder, [400], 'jj_pt', [50, 0.0, 450.0], "Dijet p_{T}", variablesdir)
+    makeBackgroundshist(output_folder, [400], 'llmetjj_minDR_l_j', [50, .0, 5.0], "#DeltaR_{l,j}", variablesdir)
+    makeBackgroundshist(output_folder, [400], 'llmetjj_MTformula', [50, 0.0, 500.0],"MT", variablesdir)
+    #makeBackgroundshist(output_folder, [400], 'met_pt', [50, 0.0, 500.0],"MET", variablesdir)
+#plotallkinematics()
+
+def generateHMEbins(mass):
+    lowM = 250.0; highM = 1200.0
+    xbins = [230, lowM]
+    x = lowM
+    step = 20.0 
+    if mass >500:
+        step = 30.0
+    while x <= highM-150.0:
+        if abs(x-mass)<= 200 and abs(x-mass)>120.0:
+            x = x+step*1.5
+            xbins.append(x)
+        elif abs(x-mass)> 200.:
+            x = x+step+30
+            xbins.append(x)
+        else:
+            x = x+step
+            xbins.append(x)
+    xbins.append(1200.0)
+    print "Benchmark ", mass ," HME mass bins ",xbins
+    return np.asarray(xbins)
+            
+
+def makeLouvainLimithist(masspoints, nnout, outdir):
+    bgnames = ["sT","DY","TT"]
+    outfile = os.path.join(outdir, "Hhh_FinalBGYield_paper_%s.root"%nnout)
+    plotname = os.path.join(outdir, "Hhh_FinalBGYield_paper_%s"%nnout)
+    ###create tfile
+    tfile = ROOT.TFile(outfile, "RECREATE")
+    tfile.Close()
+    nnbins = []
+    for x in range(0, 75-9+1):
+        nnbins.append(x*1.0/25.0)
+    print "nnbins ",nnbins
+    nnbins_x = np.asarray(nnbins)
+    xtitle = "DNN output, M_{jj} bins"
+    for mass in masspoints:
+        cut = "({nnout}_M{mass}>3.0/25 && hme_h2mass_reco>=250)".format(nnout = nnout, mass = mass)
+        todraw = "(({nnout}_M{mass}-3.0/25)*(jj_M<75 && {nnout}_M{mass}>3.0/25)+(jj_M>=75 && jj_M<140 && {nnout}_M{mass}>3.0/25)*({nnout}_M{mass}+1-6.0/25)+(jj_M>=140 && {nnout}_M{mass}>3.0/25)*({nnout}_M{mass}+2-9.0/25))".format(nnout = nnout, mass=mass)
+	file_s = os.path.join(output_folder, "radion_M%d_addNN.root"%(mass))
+        print "file_s ",file_s
+        backgrounddict = {}
+	for bg in bgnames:
+	    allfiles = os.listdir(output_folder)
+	    backgrounddict[bg] = []
+	    for f in allfiles:
+		if f.startswith(bg):
+		   backgrounddict[bg].append(os.path.join(output_folder, f))
+        suffix = "M%d"%(mass)
+        histForlimits1D(backgrounddict, bgnames, file_s, mass, todraw, cut, nnbins_x, xtitle,suffix, outfile, plotname)
+        
+
+
+def make1DLimithist(masspoints, nnout, nnoutcut, xtodraw, suffix, outfile, outdir):
+    bgnames = ["sT","DY","TT"]
+    plotname = os.path.join(outdir, "Hhh_FinalBGYield_xsec1pb_HME_%s"%nnout)
+    ###create tfile
+    xtitle = "HME output"
+    for mass in masspoints:
+        cut = "({nnout}_M{mass}>{nnoutcut}) && {xvariable}>250.0".format(nnout = nnout, mass = mass, nnoutcut = nnoutcut, xvariable = xtodraw)
+        xbins = generateHMEbins(mass)
+        xmin = xbins[0]; xmax = xbins[-1]; nxbin = len(xbins)
+        todraw = "(({xvariable})*(jj_M<75)+(jj_M>=75 && jj_M<140)*({xvariable}+{massgap})+(jj_M>=140)*({xvariable}+2*{massgap}))".format(xvariable = xtodraw, massgap = xmax-xmin)
+        tmpbins = xbins[1:]
+        for i in range (1, 3):
+            for xval in tmpbins:
+                #print "xval + i*(xmax-xmin) ",xval + i*(xmax-xmin)," xval ",xval," xmax -xmin ",xmax-xmin
+                xbins = np.append(xbins, xval + i*(xmax-xmin))
+
+        #todraw = "((jj_M>=75 && jj_M<140)*({xvariable}))".format(xvariable = xtodraw)
+        #print "final xbins ",xbins
 	file_s = os.path.join(output_folder, "radion_M%d_addNN.root"%(mass))
         backgrounddict = {}
 	for bg in bgnames:
@@ -523,10 +914,105 @@ def makeLouvainLimithist(masspoints, nnout, outdir):
 	    for f in allfiles:
 		if f.startswith(bg):
 		   backgrounddict[bg].append(os.path.join(output_folder, f))
-        histForlimits1D(backgrounddict, bgnames, file_s, mass, todraw, cut, nnbins, outfile, plotname)
+        histForlimits1D(backgrounddict, bgnames, file_s, mass, todraw, cut, xbins, xtitle, suffix, outfile, plotname)
 
-limitdir = "HistForLimits_test"
+def make1DLimithist_HEMwithNNcut(masspoints, nnout, outdir):
+    bgnames = ["sT","DY","TT"]
+    treename = "evtreeHME_nn"
+    bestNNcut = {}
+    ch_b = ROOT.TChain(treename)
+    backgrounddict = {}
+    for bg in bgnames:
+        allfiles = os.listdir(output_folder)
+        for f in allfiles:
+            if f.startswith(bg):
+                bgfile = os.path.join(output_folder, f)
+                ch_b.Add(bgfile)
+
+    outfile = os.path.join(outdir, "Hhh_FinalBGYield_HME_%s.root"%nnout)
+    tfile = ROOT.TFile(outfile, "RECREATE")
+    tfile.Close()
+    for mass in masspoints:
+        ch_s = ROOT.TChain(treename)
+        signalweight = "final_total_weight"
+        jobsdone = 1.0#
+        bgweight = "(35.87*1000*cross_section/event_weight_sum)*final_total_weight*%f"%(jobsdone)
+        cut = "(jj_M>=75 && jj_M<140 && hme_h2mass_reco>=250 )"
+        xbins = "(25, 0, 1.0)"
+        file_s =  os.path.join(output_folder, "radion_M%d_addNN.root"%(mass))
+        ch_s.Add(file_s)
+        cuts_signal = "(%s)*(%s)"%(cut, signalweight) 
+        cuts_bg = "(%s)*(%s)"%(cut, bgweight) 
+        bestWP, bestS = bestSensitivityNNWP(ch_s, ch_b, nnout+"_M%d"%mass, 40, cuts_signal, cuts_bg, mass, outdir)
+        bestNNcut[mass] = bestWP
+
+    for mass in masspoints:
+        outdir_tmp = os.path.join(outdir, "M_%d"%mass)
+        if not os.path.exists(outdir_tmp):
+            os.makedirs(outdir_tmp)
+        bestWP = bestNNcut[mass] 
+        for i in range(0, 12):
+            nnoutcut = bestWP - i*0.04
+            if i == 11:
+                nnoutcut = 0.012
+            if nnoutcut <= 0: 
+                print "warning, nnoutcut less than zero !!!, pass"
+                continue
+            suffix = "RadionM%d_WP%d"%(mass, i)
+            make1DLimithist([mass], nnout, nnoutcut, "hme_h2mass_reco", suffix,outfile, outdir_tmp)
+
+
+
+def make2DLimithist(masspoints, nnout, ytodraw, ybins, ytitle, outdir):
+    bgnames = ["sT","DY","TT"]
+    outfile = os.path.join(outdir, "Hhh_FinalBGYield_2Dlimits_%s.root"%nnout)
+    plotname = os.path.join(outdir, "Hhh_FinalBGYield_2Dlimits_%s_%s"%(nnout, ytodraw))
+    ###create tfile
+    tfile = ROOT.TFile(outfile, "RECREATE")
+    tfile.Close()
+    nnbins = [75, 0.0, 3.0] 
+    nnbins[0] = nnbins[0] - 3*3
+    nnbins[1] = nnbins[1]
+    nnbins[2] = nnbins[2] - 1.0/25*9
+    print "nnbins ",nnbins
+    for mass in masspoints:
+        cut = "({nnout}_M{mass}>3.0/25) && {y}>0".format(nnout = nnout, mass = mass, y=ytodraw)
+        xtodraw  = "(({nnout}_M{mass}-3.0/25)*(jj_M<75) + (jj_M>=75 && jj_M<140)*({nnout}_M{mass}+1-6.0/25)+(jj_M>=140)*({nnout}_M{mass}+2-9.0/25))".format(nnout = nnout, mass=mass)
+        xtitle = "DNN output, M_{jj} bins"
+	file_s = os.path.join(output_folder, "radion_M%d_addNN.root"%(mass))
+        backgrounddict = {}
+	for bg in bgnames:
+	    allfiles = os.listdir(output_folder)
+	    backgrounddict[bg] = []
+	    for f in allfiles:
+		if f.startswith(bg):
+		   backgrounddict[bg].append(os.path.join(output_folder, f))
+        histForlimits2D(backgrounddict, bgnames, file_s, mass, xtodraw,ytodraw, cut, nnbins, ybins, xtitle, ytitle, outfile, plotname)
+
+#limitdir = "HistForLimits_2D_xsec1pb/"
+#limitdir = "HistForLimits_HME_1D_xsec1pb_nnout5_MTonly/"
+limitdir = "HistForLimits_1D_xsec1pb_LouvainMTonly_cutonHME_20180201/"
+#limitdir = "HistForLimits_1D_xsec1pb_HME_MTonly_addCR_20180201/"
 os.system("mkdir -p "+limitdir)
-#makeLouvainLimithist([260, 350, 400, 500], limitdir)
-makeLouvainLimithist([260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900], "nnout_MTonly" ,limitdir)
+#generateHMEbins(900)
+#makeLouvainLimithist([260], "nnout_MTonly",limitdir)
+#make1DLimithist([300], "nnout_MTonly", 0.2, "hme_h2mass_reco", limitdir)
+#make2DLimithist([400], "nnout_MTonly", "hme_h2mass_reco", [80, 200.0, 1000.0], "HME reco mass", limitdir)
+#make2DLimithist([260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900], "nnout_MTonly", "hme_h2mass_reco", [80, 200.0, 1000.0], "HME reco mass", limitdir)
 
+
+#for nnout in modellist:
+for nnout in ["MTonly"]:
+    masspoints = [260, 270, 300, 350, 400, 450, 500, 550, 600, 650, 750, 800, 900]
+    #masspoints = [300, 500, 900]
+    #masspoints = [260, 300, 350, 400, 500, 600, 750, 900]
+
+    makeLouvainLimithist(masspoints, "nnout_"+nnout, limitdir)
+
+    #nnoutcut = 0.5
+    #xtodraw = "hme_h2mass_reco"
+    #make1DLimithist(masspoints, "nnout_"+nnout, nnoutcut, xtodraw, limitdir)
+    #make1DLimithist_HEMwithNNcut(masspoints, "nnout_"+nnout, limitdir)
+    print "nnout ",nnout
+
+print "done with writeNNToTee.py"

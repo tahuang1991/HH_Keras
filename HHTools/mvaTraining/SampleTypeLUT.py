@@ -17,7 +17,8 @@ for i,m in enumerate(resonant_allmasses):
 
 ModelLUT = { 
 	'MTonly':{
-	    'workingdir' : '/Users/taohuang/Documents/DiHiggs/20170530/20170905_Louvain_10k/HH_Keras/HHTools/mvaTraining/hh_resonant_trained_models_kinematicwithMT_20171102/2017-11-08_90epochs/',
+            #'workingdir' : '/Users/taohuang/Documents/DiHiggs/20170530/20170905_Louvain_10k/HH_Keras/HHTools/mvaTraining/hh_resonant_trained_models_kinematicwithMT_20171102/2017-11-08_90epochs/',
+	    'workingdir' : '/Users/taohuang/Documents/DiHiggs/20170530/20170905_Louvain_10k/HH_Keras/HHTools/mvaTraining/hh_resonant_trained_models_kinematicwithMT_20171110_Louvain/2017-11-10_100epochs/',
             'legend': 'Kinematic + MT',
 	    'inputs': ['jj_pt', 'll_pt', 'll_M', 'll_DR_l_l', 'jj_DR_j_j', 'llmetjj_DPhi_ll_jj', 'llmetjj_minDR_l_j', 'llmetjj_MTformula', 'isSF'],
 		},
